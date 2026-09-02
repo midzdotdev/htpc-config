@@ -16,6 +16,11 @@ profile tv {
 	# 1080p panel. Stremio has no interface-size setting of its own, and at
 	# 100% the text is too small from the sofa.
 	output HDMI-A-1 enable mode 1920x1080@60Hz position 0,0 scale 1.25
+	# A TV coming back is activity, even though it generates no input event.
+	# Only fires if the link actually dropped — which this TV has stopped
+	# doing — so it is a belt-and-braces path, not the primary one. With a TV
+	# that holds HDMI up, the first remote press clears the inhibit instead.
+	exec ~/bin/idle-stop.sh --clear
 	# Cage spans every connected output by default, which would stretch the
 	# UI across the TV and the laptop panel.
 	output eDP-1 disable

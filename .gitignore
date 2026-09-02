@@ -2,3 +2,7 @@ result
 result-*
 .direnv
 *.swp
+
+# Python bytecode from the scripts in home/files/
+__pycache__/
+*.pyc

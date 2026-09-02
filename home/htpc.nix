@@ -40,6 +40,28 @@
     };
 
     # Output layout + the 125% UI scale, re-applied on TV hotplug.
+    # Idle backstop: stops Stremio when nothing has happened for a while.
+    # Needed because this TV stopped dropping the HDMI link when powered off,
+    # so tv-off-hook.sh can no longer fire. See the header of idle-stop.sh.
+    "bin/idle-stop.sh" = {
+      source = ./files/idle-stop.sh;
+      executable = true;
+    };
+
+    # Renders the "Stremio is paused" still that idle-stop.sh puts on the TV,
+    # so a stopped session does not look like a broken box.
+    "bin/make-idle-splash.py" = {
+      source = ./files/make-idle-splash.py;
+      executable = true;
+    };
+
+    # Moves the pointer without clicking, so the cursor can be nudged after
+    # another client has held the display. A click here would toggle playback.
+    "bin/move-pointer.py" = {
+      source = ./files/move-pointer.py;
+      executable = true;
+    };
+
     ".config/kanshi/config".source = ./files/kanshi-config;
 
   };

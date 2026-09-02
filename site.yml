@@ -31,6 +31,36 @@
       - wayvnc          # browser-reachable VNC on the LAN
       - novnc
       - websockify
+    # System-level packages the session depends on but never names.
+    system_packages:
+      # A desktop portal must exist even in a bare kiosk. Without one,
+      # libadwaita blocks for 25s per settings lookup (colour-scheme,
+      # contrast, high-contrast) before giving up, adding roughly 100s to
+      # every Stremio launch.
+      - xdg-desktop-portal
+      - xdg-desktop-portal-gtk
+      # Sound.
+      - pipewire
+      - pipewire-pulse
+      - wireplumber
+      - rtkit
+      # Intel iGPU video acceleration. The dGPU is deliberately blacklisted,
+      # so this is the only path to hardware decode.
+      - intel-media-va-driver
+      - i965-va-driver
+      - va-driver-all
+      # socat backs the Unified Remote web-UI proxy unit.
+      - socat
+      # Diagnostics. Only the ones actually on the box -- the old Nix list named
+      # several (htop, iotop, lm_sensors, sshpass, vim, jq) that were never
+      # installed, which is the sort of fiction that made that config
+      # untrustworthy.
+      - pciutils
+      - usbutils
+      - strace
+      - git
+      - curl
+
     # Needed only to build uxplay; harmless to leave installed.
     uxplay_build_packages:
       - cmake
@@ -129,6 +159,67 @@
     # 0775/0664 throughout, not 0755/0644: the box was set up under a umask of
     # 002 and these modes are what is actually on disk. Matching them keeps a
     # re-run a genuine no-op instead of silently reworking permissions.
+    - name: Install system packages
+      become: true
+      ansible.builtin.apt:
+        name: "{{ system_packages }}"
+        state: present
+
+    # Autologin on tty1 is what starts the whole session: agetty logs the htpc
+    # user in, ~/.bash_profile sees tty1 and starts Cage. There is no display
+    # manager and no X server -- Stremio v5's WebView fails to start under X11
+    # on this hardware (upstream stremio-bugs#2634).
+    - name: Install system configuration
+      become: true
+      ansible.builtin.copy:
+        src: "files/system/{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - src: getty-autologin.conf
+          dest: /etc/systemd/system/getty@tty1.service.d/autologin.conf
+        - src: logind-no-sleep.conf
+          dest: /etc/systemd/logind.conf.d/no-sleep.conf
+        - src: blacklist-nouveau.conf
+          dest: /etc/modprobe.d/blacklist-nouveau.conf
+        - src: 99-uinput.rules
+          dest: /etc/udev/rules.d/99-uinput.rules
+        - src: 99-pci-pm.rules
+          dest: /etc/udev/rules.d/99-pci-pm.rules
+        - src: modules-load-uinput.conf
+          dest: /etc/modules-load.d/uinput.conf
+        - src: urserver-web-proxy.service
+          dest: /etc/systemd/system/urserver-web-proxy.service
+        - src: keyboard
+          dest: /etc/default/keyboard
+      notify:
+        - reload systemd
+        - reload udev
+
+    - name: Put the htpc user in the input group
+      become: true
+      ansible.builtin.user:
+        name: htpc
+        groups: input
+        append: true
+
+    - name: Expose the Unified Remote web UI on the LAN
+      become: true
+      ansible.builtin.systemd_service:
+        name: urserver-web-proxy
+        enabled: true
+        state: started
+
+    # No cellular modem in this laptop, so ModemManager only adds a daemon and
+    # boot-time device probing.
+    - name: Disable ModemManager
+      become: true
+      ansible.builtin.systemd_service:
+        name: ModemManager
+        enabled: false
+        state: stopped
+      failed_when: false
+
     - name: Create ~/bin
       ansible.builtin.file:
         path: "{{ home }}/bin"
@@ -174,7 +265,32 @@
     - name: Report what is left to do by hand
       ansible.builtin.debug:
         msg:
-          - "Unified Remote (/opt/urserver) is not managed here -- it is a
-             third-party download with its own installer. Install it by hand;
-             the kiosk script starts and watchdogs it."
+          - "Unified Remote (/opt/urserver) is not managed here: closed source,
+             distributed as a tarball, no apt package. Fetch it by resolving
+             https://www.unifiedremote.com/download/linux-x64-portable (a 302 to
+             the current build) and unpack to /opt/urserver. Note the download
+             path is /linux-x64/<build>/urserver-<version>.tar.gz where <build>
+             is only the LAST version component, not the full version -- a
+             previous attempt to pin this guessed the full version and 404'd.
+             Upstream garbage-collects old builds, so a stale pin eventually
+             404s rather than merely being out of date. The kiosk script starts
+             and watchdogs it."
           - "Stremio must be signed in by hand; its addons live in the account."
+          - "There is no firewall on this box (iptables policy is ACCEPT). It
+             listens on 9530 for the Unified Remote web UI, 9512 for the remote
+             protocol, 11470 for Stremio's streaming server, 6080 for noVNC, and
+             uxplay's dynamic AirPlay ports."
+
+  handlers:
+    - name: reload systemd
+      become: true
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # udev rules only apply to devices added after the reload, so the uinput
+    # permissions and the PCI power setting take effect on the next boot (or
+    # the next time the device appears) rather than immediately.
+    - name: reload udev
+      become: true
+      ansible.builtin.command: udevadm control --reload
+      changed_when: true

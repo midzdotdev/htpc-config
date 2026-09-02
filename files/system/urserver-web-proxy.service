@@ -1,0 +1,12 @@
+[Unit]
+Description=Expose Unified Remote web UI on the LAN
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP6-LISTEN:9530,fork,reuseaddr,ipv6only=0 TCP:127.0.0.1:9510
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

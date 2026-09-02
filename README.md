@@ -1,15 +1,14 @@
 # htpc-config
 
-Configuration for the Stremio kiosk HTPC, applied with Ansible.
+Ansible configuration for the Stremio kiosk HTPC.
 
-The box is a laptop running **Debian 13**, wall-mounted behind a TV. It boots
+The box is a laptop running Debian 13, wall-mounted behind a TV. It boots
 straight into Stremio under Cage (Wayland), receives AirPlay, and takes input
 from a phone over Unified Remote.
 
-> This repo used to describe a NixOS system that was never installed — the box
-> has always run Debian, so the config drifted and the repo could not be
-> trusted. Ansible manages the box as it actually is. The old Nix files are in
-> [`archive/nix/`](archive/nix/) for the knowledge in them, not for use.
+There is no Nix here. The repo used to hold a NixOS config for a machine that
+was never installed, so nothing enforced it and the box drifted away from it.
+Do not add Nix back unless you also reinstall the OS.
 
 ## Applying it
 
@@ -17,71 +16,78 @@ from a phone over Unified Remote.
 ansible-playbook site.yml -K
 ```
 
-`-K` prompts for the sudo password: apt and the uxplay install need root.
-Needs only `ansible-core` — no collections, no vault, no group_vars.
+`-K` prompts for the sudo password. apt and the uxplay install need root.
+Nothing else is required: no collections, no vault, no group_vars, just
+ansible-core.
 
-It is idempotent, and a run against a correctly configured box reports
-`changed=0`. **If a run wants to change something, work out which side is
-wrong before letting it through** — the box has been the source of truth more
-often than this repo has.
+A run against a correctly configured box reports `changed=0`. If a run wants to
+change something, work out which side is wrong before you let it through. The
+box has been right more often than this repo has.
 
 ## Layout
 
 ```
-site.yml            # everything: packages, uxplay, flatpak, the session files
-inventory.ini       # one host, reached by the "htpc" alias in ~/.ssh/config
-files/              # the scripts, copied to ~/bin and ~/.config
-archive/            # the abandoned NixOS config, kept for reference
+site.yml            packages, uxplay, flatpak, system config, session files
+inventory.ini       one host, reached by the "htpc" alias in ~/.ssh/config
+files/              scripts copied to ~/bin and ~/.config
+files/system/       units, udev rules and modprobe config copied to /etc
 ```
 
-One flat playbook rather than roles. There is one host and one job.
+One flat playbook, no roles. There is one host and one job.
 
 ## The session
 
 `.bash_profile` starts Cage on tty1, which runs `kiosk-wayland.sh`. That script
-puts Stremio in the foreground and everything else in background watchdog loops:
-kanshi, uxplay, Unified Remote, the VNC pair, and the idle backstop.
+puts Stremio in the foreground and everything else into background watchdog
+loops: kanshi, uxplay, Unified Remote, the VNC pair and the idle backstop.
 
-**To restart the session, kill the `kiosk-wayland.sh` process tree** so Cage
-exits on its own and `.bash_profile` respawns it:
+To restart the session, kill the `kiosk-wayland.sh` process tree so Cage exits
+on its own and `.bash_profile` starts a fresh one:
 
 ```
 ssh htpc 'pkill -f "bin/kiosk-wayland.sh"'
 ```
 
-Do **not** `kill -9` Cage. Cage dies but its child script and every helper are
-orphaned to `ppid 1` and keep running alongside the new session. That happened
+Never `kill -9` Cage. Cage dies, but its child script and every helper survive
+as orphans on `ppid 1` and keep running alongside the new session. That happened
 once and went unnoticed for nine days, with two kanshi instances fighting over
 the output config and two uxplay instances competing for AirPlay.
 
-## Read the scripts
+## Things that have cost real time
 
-The non-obvious decisions are documented where they are made, not here — a
-comment on the line is found by whoever next edits it. `kiosk-wayland.sh` in
-particular explains why each helper exists and which of them are load-bearing.
+The reasoning for each decision sits next to the decision, in the script or
+config file that makes it. Read `kiosk-wayland.sh` before changing the session.
+Three worth knowing before you start:
 
-Three that have cost real time:
+AirPlay uses `glimagesink`, not `waylandsink`. waylandsink passes video as
+`wl_shm` buffers, and an iPhone mirror stream produces a stride that wlroots
+rejects. A Wayland protocol error kills the client connection, so one bad buffer
+takes out the display path for the life of the process. A Mac worked and the
+phone silently did not. Do not try `gtkwaylandsink` either: it opens its window
+when the pipeline starts rather than when video arrives, so a failed session
+leaves a blank white window sitting over Stremio.
 
-- **AirPlay uses `glimagesink`, not `waylandsink`.** waylandsink passes video as
-  `wl_shm` buffers and an iPhone mirror stream produces a stride wlroots
-  rejects; a Wayland protocol error is fatal to the connection, so one bad
-  buffer kills the display path for the life of the process. A Mac worked, the
-  phone silently did not. Also: never `gtkwaylandsink`.
-- **The TV no longer drops the HDMI link when powered off**, so `tv-off-hook.sh`
-  can never fire. `idle-stop.sh` is the backstop that replaced it.
-- **Cage exposes no layer-shell and no data-control**, so wallpaper daemons and
-  the Wayland clipboard cannot work on this box at all.
+The TV no longer drops the HDMI link when it is powered off, so `tv-connected`
+always reports a display and `tv-off-hook.sh` can never fire. `idle-stop.sh` is
+the backstop that covers it, driven by swayidle.
+
+Cage exposes no layer-shell and no data-control. Wallpaper daemons and the
+Wayland clipboard cannot work on this box at all.
 
 ## Not managed here
 
-- **Unified Remote** (`/opt/urserver`) — third-party download with its own
-  installer. The kiosk script starts and watchdogs it.
-- **Wi-Fi credentials** — set once with `nmcli`. Don't commit secrets; this
-  repo is public.
-- **Stremio account and addons** — per-device login, synced via the account.
+Unified Remote (`/opt/urserver`) is closed source and ships as a tarball with no
+apt package, so install it by hand. `site.yml` prints the download path and the
+version-pinning trap when it runs.
+
+Wi-Fi credentials are set once with `nmcli`. Do not commit them; this repo is
+public.
+
+The Stremio account is per-device state, and its addon list syncs through the
+account.
 
 ## VNC
 
 `http://<the box's LAN IP>:6080/vnc.html` serves noVNC, bound to the wifi
-address only so it never answers on tailscale. Deliberately unauthenticated:
-anyone on the LAN who opens it gets full control of the session.
+address so it never answers on tailscale. It is deliberately unauthenticated.
+Anyone on the LAN who opens it gets full control of the session.

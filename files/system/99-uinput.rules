@@ -1,0 +1,12 @@
+# Unified Remote injects keypresses through /dev/uinput, and both this rule and
+# the uinput module load (see modules-load-uinput.conf) are load-bearing now the
+# session is Wayland.
+#
+# urserver detects Wayland, falls back from X11 XTEST to uinput, and if it
+# cannot open the device it logs "No input builder available" once per keypress
+# and does nothing. The phone connects fine and the remote just silently does
+# not work, which is a miserable thing to debug.
+#
+# The module is =m and nothing else pulls it in, and default permissions on the
+# node are root-only -- so the module load and this group rule are both needed.
+KERNEL=="uinput", MODE="0660", GROUP="input", TAG+="uaccess"

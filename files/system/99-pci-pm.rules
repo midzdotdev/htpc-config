@@ -1,0 +1,5 @@
+# Let the dormant NVIDIA MX550 runtime-suspend. nouveau is blacklisted, so
+# nothing binds the card — but with no driver the kernel leaves runtime PM at
+# "on", and it sits fully powered producing heat the fan has to shift. With
+# "auto" it drops to D3cold.
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{power/control}="auto"

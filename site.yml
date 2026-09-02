@@ -1,0 +1,180 @@
+---
+# Configuration for the HTPC: a Debian box that boots straight into Stremio
+# under Cage, with AirPlay and a phone remote.
+#
+# Deliberately one flat playbook rather than roles. There is one host and one
+# job; roles would add directories without adding clarity.
+#
+#     ansible-playbook site.yml -K        (-K because apt and the uxplay
+#                                          install need root)
+#
+# Everything here is idempotent and safe to re-run.
+
+- name: Configure the HTPC kiosk
+  hosts: htpc
+  gather_facts: true
+
+  vars:
+    home: /home/htpc
+    uxplay_version: "1.73.6"
+    # Only the packages this kiosk actually depends on. The box has ~255
+    # manually-installed packages; listing them all would be noise.
+    kiosk_packages:
+      - cage            # the Wayland kiosk compositor the session runs under
+      - kanshi          # re-applies the output layout when the TV hotplugs
+      - grim            # screenshots, used for debugging the session
+      - wlr-randr       # inspect/one-shot output changes
+      - swayidle        # drives the idle backstop (see files/idle-stop.sh)
+      - imv             # shows the "Stremio is paused" still
+      - python3-pil     # renders that still (files/make-idle-splash.py)
+      - flatpak         # Stremio ships as a flatpak
+      - wayvnc          # browser-reachable VNC on the LAN
+      - novnc
+      - websockify
+    # Needed only to build uxplay; harmless to leave installed.
+    uxplay_build_packages:
+      - cmake
+      - build-essential
+      - libssl-dev
+      - libplist-dev
+      - libavahi-compat-libdnssd-dev
+      - libgstreamer1.0-dev
+      - libgstreamer-plugins-base1.0-dev
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-libav
+      - gstreamer1.0-gl
+      - gstreamer1.0-tools
+
+  tasks:
+    - name: Install kiosk packages
+      become: true
+      ansible.builtin.apt:
+        name: "{{ kiosk_packages }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install uxplay build dependencies
+      become: true
+      ansible.builtin.apt:
+        name: "{{ uxplay_build_packages }}"
+        state: present
+
+    # uxplay is not packaged for Debian, so it is built from the pinned
+    # upstream release. The version check makes this a no-op once installed.
+    # check_mode: false so this still runs under --check. Without it the
+    # version lookup is skipped, the guard below sees an empty string, and a
+    # dry run tries to build uxplay on a box that already has it.
+    - name: Check installed uxplay version
+      ansible.builtin.command: /usr/local/bin/uxplay -v
+      register: uxplay_installed
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Build and install uxplay {{ uxplay_version }}
+      when: uxplay_version not in (uxplay_installed.stdout | default(''))
+      block:
+        - name: Fetch uxplay source
+          ansible.builtin.unarchive:
+            src: "https://github.com/FDH2/UxPlay/archive/refs/tags/v{{ uxplay_version }}.tar.gz"
+            dest: /tmp
+            remote_src: true
+            creates: "/tmp/UxPlay-{{ uxplay_version }}"
+
+        - name: Configure and build uxplay
+          ansible.builtin.shell:
+            cmd: cmake -B build && cmake --build build
+            chdir: "/tmp/UxPlay-{{ uxplay_version }}"
+          changed_when: true
+
+        - name: Install uxplay
+          become: true
+          ansible.builtin.command:
+            cmd: cmake --install build
+            chdir: "/tmp/UxPlay-{{ uxplay_version }}"
+          changed_when: true
+
+    - name: Check whether the flathub remote exists
+      ansible.builtin.command: flatpak remotes --columns=name
+      register: flatpak_remotes
+      changed_when: false
+
+    # Check-then-act rather than relying on --if-not-exists: that flag succeeds
+    # silently, so there is no output to tell "added" from "already there" and
+    # the task reports a change on every run.
+    - name: Add the flathub remote
+      become: true
+      ansible.builtin.command:
+        cmd: flatpak remote-add flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      when: "'flathub' not in flatpak_remotes.stdout"
+      changed_when: true
+
+    - name: Check whether Stremio is installed
+      ansible.builtin.command: flatpak list --app --columns=application
+      register: flatpaks
+      changed_when: false
+
+    # Plain commands rather than community.general.flatpak, so this playbook
+    # needs nothing beyond ansible-core to run.
+    - name: Install Stremio
+      become: true
+      ansible.builtin.command:
+        cmd: flatpak install -y flathub com.stremio.Stremio
+      when: "'com.stremio.Stremio' not in flatpaks.stdout"
+      changed_when: true
+
+    # 0775/0664 throughout, not 0755/0644: the box was set up under a umask of
+    # 002 and these modes are what is actually on disk. Matching them keeps a
+    # re-run a genuine no-op instead of silently reworking permissions.
+    - name: Create ~/bin
+      ansible.builtin.file:
+        path: "{{ home }}/bin"
+        state: directory
+        mode: "0775"
+
+    # The session scripts. Changing any of these needs the session restarted:
+    # kill the kiosk-wayland.sh process tree so Cage exits and .bash_profile
+    # respawns it. Do NOT kill Cage itself -- that orphans the script and every
+    # helper to ppid 1, leaving a second generation running alongside the new
+    # one (two kanshi instances then fight over the output config).
+    - name: Install session scripts
+      ansible.builtin.copy:
+        src: "files/{{ item }}"
+        dest: "{{ home }}/bin/{{ item }}"
+        mode: "0755"
+      loop:
+        - kiosk-wayland.sh
+        - tv-connected
+        - tv-off-hook.sh
+        - urclick-fix.py
+        - idle-stop.sh
+        - make-idle-splash.py
+        - move-pointer.py
+
+    - name: Install the login shell that starts the session on tty1
+      ansible.builtin.copy:
+        src: files/bash_profile
+        dest: "{{ home }}/.bash_profile"
+        mode: "0664"
+
+    - name: Install the kanshi output layout
+      ansible.builtin.copy:
+        src: files/kanshi-config
+        dest: "{{ home }}/.config/kanshi/config"
+        mode: "0644"
+
+    - name: Render the "Stremio is paused" still
+      ansible.builtin.command:
+        cmd: "python3 {{ home }}/bin/make-idle-splash.py"
+        creates: "{{ home }}/.local/share/kiosk-idle.png"
+
+    - name: Report what is left to do by hand
+      ansible.builtin.debug:
+        msg:
+          - "Unified Remote (/opt/urserver) is not managed here -- it is a
+             third-party download with its own installer. Install it by hand;
+             the kiosk script starts and watchdogs it."
+          - "Stremio must be signed in by hand; its addons live in the account."

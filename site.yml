@@ -16,7 +16,7 @@
 
   vars:
     home: /home/htpc
-    uxplay_version: "1.73.6"
+    uxplay_version: "1.73.7"
     # Only the packages this kiosk actually depends on. The box has ~255
     # manually-installed packages; listing them all would be noise.
     kiosk_packages:

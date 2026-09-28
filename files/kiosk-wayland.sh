@@ -100,9 +100,26 @@ rm -f "$XDG_RUNTIME_DIR/kiosk-idle-stop"
 # pipeline starts rather than when video arrives, so a failed session leaves a
 # blank white window parked on top of Stremio until the session is restarted.
 # glimagesink was checked for this specifically and parks nothing while idle.
+#
+# -hls is deliberately NOT used. It made uxplay advertise AirPlay video support
+# (feature bits 0 and 4), so iOS routed Safari/WebKit video at the HLS path.
+# uxplay only implements HLS for the YouTube app and aborts on anything else,
+# crashing the whole server mid-session:
+#
+#   airplay_video.c:790 adjust_master_playlist: Assertion byte_count == new_len
+#   http_handlers.h:471 http_handler_action: Assertion airplay_video failed
+#   WARNING: Unsupported HLS streaming format: clientProcName com.apple.WebKit.GPU
+#            not found in supported list: YouTube      (then SIGSEGV)
+#
+# It never made Safari's per-video AirPlay button work either: upstream says
+# browser AirPlay is unsupported. Mirroring is the only path that works.
+#
+# stdbuf -oL because uxplay's stdout is block-buffered when piped into logger,
+# so lines only reached the journal in 4KB bursts. Sessions and crashes were
+# invisible, which cost real debugging time more than once.
 (
   while :; do
-    /usr/local/bin/uxplay -n HTPC -nh -fs -ca -nofreeze -vs glimagesink 2>&1 | logger -t uxplay
+    stdbuf -oL -eL /usr/local/bin/uxplay -n HTPC -nh -fs -ca -nofreeze -vs glimagesink 2>&1 | logger -t uxplay
     sleep 2
   done
 ) &

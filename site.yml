@@ -17,6 +17,13 @@
   vars:
     home: /home/htpc
     uxplay_version: "1.73.7"
+    # Where the "vpn" namespace tunnels to. The hostname is a pool: every
+    # lookup returns a different Manchester server (30s TTL), which is what
+    # lets vpn-netns-check fail over by resolving it again. Every UK server
+    # shares one public key; it is the wireguard_udp public_key in:
+    #   curl -s 'https://api.nordvpn.com/v1/servers/recommendations?filters[country_id]=227&filters[servers_technologies][identifier]=wireguard_udp&limit=1'
+    nord_endpoint: manchester.gb.wg.nordhold.net
+    nord_pubkey: iX4TVS9HY+WrlTvSKaUqWmoxG6s6cwnmcEtblHf46BU=
     # Only the packages this kiosk actually depends on. The box has ~255
     # manually-installed packages; listing them all would be noise.
     kiosk_packages:
@@ -51,6 +58,8 @@
       - va-driver-all
       # socat backs the Unified Remote web-UI proxy unit.
       - socat
+      # wg, for the NordVPN tunnel in the "vpn" network namespace.
+      - wireguard-tools
       # Diagnostics. Only the ones actually on the box -- the old Nix list named
       # several (htop, iotop, lm_sensors, sshpass, vim, jq) that were never
       # installed, which is the sort of fiction that made that config
@@ -280,6 +289,84 @@
              listens on 9530 for the Unified Remote web UI, 9512 for the remote
              protocol, 11470 for Stremio's streaming server, 6080 for noVNC, and
              uxplay's dynamic AirPlay ports."
+          - "The NordVPN key for the vpn namespace is installed by hand (see
+             README). Without it the vpn tasks below fail; they run last so
+             everything above is already applied."
+
+    # The vpn namespace. Kept last: on a box without the key, bringing it up
+    # fails and ends the play, and nothing after it would run.
+    - name: Install the vpn namespace script
+      become: true
+      ansible.builtin.copy:
+        src: files/system/vpn-netns
+        dest: /usr/local/sbin/vpn-netns
+        mode: "0755"
+      notify: restart vpn-netns
+
+    - name: Install the vpn namespace unit
+      become: true
+      ansible.builtin.copy:
+        src: files/system/vpn-netns.service
+        dest: /etc/systemd/system/vpn-netns.service
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart vpn-netns
+
+    - name: Point the vpn namespace at NordVPN
+      become: true
+      ansible.builtin.copy:
+        content: |
+          NORD_ENDPOINT={{ nord_endpoint }}
+          NORD_PUBKEY={{ nord_pubkey }}
+        dest: /etc/default/vpn-netns
+        mode: "0644"
+      notify: restart vpn-netns
+
+    - name: Create /etc/netns/vpn
+      become: true
+      ansible.builtin.file:
+        path: /etc/netns/vpn
+        state: directory
+        mode: "0755"
+
+    # No restart: "ip netns exec" reads this on every call. Restarting the
+    # tunnel for it would also restart every service bound to it.
+    - name: Install the vpn namespace's resolv.conf
+      become: true
+      ansible.builtin.copy:
+        src: files/system/netns-vpn-resolv.conf
+        dest: /etc/netns/vpn/resolv.conf
+        mode: "0644"
+
+    - name: Install the stale-handshake failover units
+      become: true
+      ansible.builtin.copy:
+        src: "files/system/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - vpn-netns-check.service
+        - vpn-netns-check.timer
+      notify:
+        - reload systemd
+        - restart vpn-netns-check.timer
+
+    # Fails on a fresh box until the key is installed by hand (see README).
+    - name: Bring up the vpn namespace
+      become: true
+      ansible.builtin.systemd_service:
+        name: vpn-netns
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Start the stale-handshake failover timer
+      become: true
+      ansible.builtin.systemd_service:
+        name: vpn-netns-check.timer
+        enabled: true
+        state: started
 
   handlers:
     - name: reload systemd
@@ -294,3 +381,15 @@
       become: true
       ansible.builtin.command: udevadm control --reload
       changed_when: true
+
+    - name: restart vpn-netns
+      become: true
+      ansible.builtin.systemd_service:
+        name: vpn-netns
+        state: restarted
+
+    - name: restart vpn-netns-check.timer
+      become: true
+      ansible.builtin.systemd_service:
+        name: vpn-netns-check.timer
+        state: restarted

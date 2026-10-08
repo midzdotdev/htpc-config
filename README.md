@@ -86,6 +86,47 @@ public.
 The Stremio account is per-device state, and its addon list syncs through the
 account.
 
+The NordVPN private key for the `vpn` namespace (below) is not committed either.
+
+## The vpn namespace
+
+Sky blocks indexer websites, so anything that has to reach them runs in a
+network namespace called `vpn` whose only way out is a WireGuard tunnel to
+NordVPN. Everything else on the box, Tailscale included, keeps using the normal
+connection. If the tunnel is down, traffic inside the namespace fails rather
+than falling back to Sky. `vpn-netns.service` builds it at boot.
+
+The tunnel's endpoint is a hostname that resolves to a different Manchester
+server on each lookup. `vpn-netns-check.timer` looks every 30 seconds, and
+once the last handshake is over 135 seconds old it resolves the name again
+and moves the tunnel to whatever comes back. `journalctl -u vpn-netns-check`
+logs each move.
+
+Install the key once, as root. It is the account's NordLynx private key: the
+`nordlynx_private_key` field of
+`https://api.nordvpn.com/v1/users/services/credentials`, fetched with an access
+token from the Nord dashboard (basic auth, user `token`).
+
+```
+sudo install -m 600 /dev/null /etc/wireguard/nord.key
+sudoedit /etc/wireguard/nord.key
+sudo systemctl restart vpn-netns
+```
+
+Without a valid key the unit fails and stays failed, and so does the playbook
+run that starts it. The vpn tasks are the last in the play, so on a fresh box
+everything else is applied before that failure.
+
+Run something inside it:
+
+```
+sudo ip netns exec vpn curl https://ifconfig.me
+sudo ip netns exec vpn wg show
+```
+
+A long-running service joins it from its unit file instead; the comment at the
+top of `files/system/vpn-netns.service` has the lines to copy.
+
 ## VNC
 
 `http://<the box's LAN IP>:6080/vnc.html` serves noVNC, bound to the wifi

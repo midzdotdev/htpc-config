@@ -1,0 +1,10 @@
+[Unit]
+Description=Move the vpn namespace's tunnel to another NordVPN server if it has gone quiet
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/vpn-netns
+ExecStart=/usr/local/sbin/vpn-netns check
+# Runs every 30s. Without this, systemd's own start/finish lines add ~8.6k
+# journal entries a day. The script logs a switch at notice, so it still shows.
+LogLevelMax=notice

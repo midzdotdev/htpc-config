@@ -1,0 +1,38 @@
+# A service that should reach the internet only through NordVPN joins this
+# namespace with:
+#
+#     [Unit]
+#     BindsTo=vpn-netns.service
+#     After=vpn-netns.service
+#     [Service]
+#     NetworkNamespacePath=/run/netns/vpn
+#     BindReadOnlyPaths=/etc/netns/vpn/resolv.conf:/etc/resolv.conf
+#
+# BindReadOnlyPaths is the easy one to miss. "ip netns exec" swaps in
+# /etc/netns/vpn/resolv.conf on its own; systemd does not, so without it the
+# service uses the LAN resolver, which is unreachable from inside.
+# BindsTo matters because restarting this unit builds a fresh namespace, and
+# a joined service left running would stay in the old, dead one.
+
+[Unit]
+Description=Network namespace "vpn" routed only through NordVPN
+Wants=network-online.target
+After=network-online.target
+# "up" resolves the endpoint, and network-online on Wi-Fi does not promise
+# working DNS. Keep retrying rather than tripping the start limit and
+# sitting failed until someone notices.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/vpn-netns
+ExecStart=/usr/local/sbin/vpn-netns up
+ExecStop=/usr/local/sbin/vpn-netns down
+Restart=on-failure
+RestartSec=10
+# A missing key will not fix itself; stay failed so it shows.
+RestartPreventExitStatus=3
+
+[Install]
+WantedBy=multi-user.target

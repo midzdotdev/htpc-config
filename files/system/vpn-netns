@@ -1,0 +1,87 @@
+#!/bin/sh
+# Brings the "vpn" network namespace up or down, or (check) moves the tunnel
+# to another server when the current one stops answering. Run by
+# vpn-netns.service and vpn-netns-check.timer, which supply NORD_ENDPOINT and
+# NORD_PUBKEY from /etc/default/vpn-netns.
+#
+# wg0 is created in the root namespace and then moved into "vpn". Its UDP
+# socket stays behind in the root namespace, so the encrypted packets leave
+# over the normal main route and nothing in the root namespace's routes or
+# ip rules changes (Tailscale's rules and table 52 are untouched). Inside
+# "vpn" the only route out is wg0: if the tunnel is down, traffic fails
+# instead of leaking over the ISP.
+set -eu
+
+ns=vpn
+key=/etc/wireguard/nord.key
+
+# NORD_ENDPOINT is a pool, so each call can return a different server. This
+# runs in the root namespace on purpose: inside "vpn", DNS goes through the
+# tunnel, which is exactly what is broken when check needs a new server.
+resolve() {
+    ip=$(getent ahostsv4 "$NORD_ENDPOINT" | awk 'NR == 1 { print $1 }')
+    if [ -z "$ip" ]; then
+        # <3> is the journal's "err" level, so vpn-netns-check's
+        # LogLevelMax=notice still lets it through.
+        echo "<3>cannot resolve $NORD_ENDPOINT" >&2
+        exit 1
+    fi
+    echo "$ip:51820"
+}
+
+down() {
+    # Delete wg0 explicitly: a process still inside the namespace keeps it
+    # alive after "ip netns del", and wg0 with it.
+    ip -n "$ns" link del wg0 2>/dev/null || true
+    ip link del wg0 2>/dev/null || true
+    ip netns del "$ns" 2>/dev/null || true
+}
+
+case "${1:-}" in
+up)
+    # The key is installed by hand (see README). An exit here leaves the unit
+    # "failed"; systemd's AssertFileNotEmpty would leave it merely "inactive",
+    # which is easy to miss after a boot. 3 tells the unit not to retry.
+    if ! wg pubkey < "$key" >/dev/null 2>&1; then
+        echo "$key is missing or not a WireGuard key; see README" >&2
+        exit 3
+    fi
+    endpoint=$(resolve)
+    down
+    ip netns add "$ns"
+    ip link add wg0 type wireguard
+    wg set wg0 private-key "$key" \
+        peer "$NORD_PUBKEY" endpoint "$endpoint" \
+        allowed-ips 0.0.0.0/0,::/0 persistent-keepalive 25
+    ip link set wg0 netns "$ns"
+    # NordLynx gives every client the same tunnel address.
+    ip -n "$ns" addr add 10.5.0.2/32 dev wg0
+    ip -n "$ns" link set lo up
+    ip -n "$ns" link set wg0 up
+    ip -n "$ns" route add default dev wg0
+    echo "tunnel up via $endpoint"
+    ;;
+down)
+    down
+    ;;
+check)
+    # After the same logic as wireguard-tools' contrib/reresolve-dns: 135s is
+    # its threshold, two missed rekeys (120s) plus slack. A tunnel that has
+    # never shaken hands reads as 0, so it counts as stale too.
+    last=$(ip netns exec "$ns" wg show wg0 latest-handshakes 2>/dev/null |
+        awk '{ print $2 }')
+    # Empty when the namespace is down; nothing to fail over.
+    [ -n "$last" ] || exit 0
+    age=$(($(date +%s) - last))
+    [ "$age" -gt 135 ] || exit 0
+    [ "$last" -eq 0 ] && age=never || age="${age}s ago"
+    old=$(ip netns exec "$ns" wg show wg0 endpoints | awk '{ print $2 }')
+    new=$(resolve)
+    ip netns exec "$ns" wg set wg0 peer "$NORD_PUBKEY" endpoint "$new"
+    echo "<5>last handshake $age, endpoint $old -> $new"
+    ;;
+*)
+    echo "usage: $0 up|down|check" >&2
+    exit 2
+    ;;
+esac

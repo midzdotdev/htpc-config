@@ -318,27 +318,28 @@
         dest: "{{ home }}/.config/kanshi/config"
         mode: "0644"
 
-    # "HTPC Video": a second uxplay for AirPlay video (YouTube, Safari), next to
-    # the kiosk's "HTPC" mirroring receiver. A user unit rather than a kiosk
-    # loop, so Restart=always covers its known crash and it can be restarted
-    # without touching the session. The pairing files (~/.uxplay-video.pem,
-    # ~/.uxplay-video.register) are state the receiver writes; never manage them.
+    # "HTPC Video" (see README). Its pairing files, ~/.uxplay-video.pem and
+    # ~/.uxplay-video.register, are state the receiver writes; never manage them.
     - name: Create ~/.config/systemd/user
       ansible.builtin.file:
         path: "{{ home }}/.config/systemd/user"
         state: directory
         mode: "0755"
 
-    # Either change restarts the receiver, which drops anything playing on it.
-    - name: Install the "HTPC Video" units
+    # Restarts the receiver, which drops anything playing on it.
+    - name: Install the "HTPC Video" receiver unit
       ansible.builtin.copy:
-        src: "files/{{ item }}"
-        dest: "{{ home }}/.config/systemd/user/{{ item }}"
+        src: files/uxplay-video.service
+        dest: "{{ home }}/.config/systemd/user/uxplay-video.service"
         mode: "0664"
-      loop:
-        - uxplay-video.service
-        - uxplay-video-cursor.service
       notify: restart uxplay-video
+
+    - name: Install the "HTPC Video" pointer-park unit
+      ansible.builtin.copy:
+        src: files/uxplay-video-cursor.service
+        dest: "{{ home }}/.config/systemd/user/uxplay-video-cursor.service"
+        mode: "0664"
+      notify: restart uxplay-video-cursor
 
     # daemon_reload here, not in a handler: on a fresh box the units must be
     # loaded before this starts them. It never reports a change.
@@ -387,6 +388,12 @@
     - name: restart uxplay-video
       ansible.builtin.systemd_service:
         name: uxplay-video.service
+        scope: user
+        state: restarted
+
+    - name: restart uxplay-video-cursor
+      ansible.builtin.systemd_service:
+        name: uxplay-video-cursor.service
         scope: user
         state: restarted
 

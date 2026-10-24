@@ -116,8 +116,9 @@ rm -f "$XDG_RUNTIME_DIR/kiosk-idle-stop"
 #   WARNING: Unsupported HLS streaming format: clientProcName com.apple.WebKit.GPU
 #            not found in supported list: YouTube      (then SIGSEGV)
 #
-# It never made Safari's per-video AirPlay button work either: upstream says
-# browser AirPlay is unsupported. Mirroring is the only path that works.
+# AirPlay video (YouTube, in the app or in Safari) goes to the separate
+# "HTPC Video" receiver instead: a patched pre-release uxplay with -hls, run as
+# the user unit uxplay-video.service so its crashes never take down this one.
 #
 # stdbuf -oL because uxplay's stdout is block-buffered when piped into logger,
 # so lines only reached the journal in 4KB bursts. Sessions and crashes were

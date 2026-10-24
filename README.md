@@ -78,7 +78,7 @@ Wayland clipboard cannot work on this box at all.
 
 The box advertises two AirPlay receivers. "HTPC" is the kiosk's mirroring
 receiver. "HTPC Video" takes AirPlay video, where the sender hands over a URL
-and the box plays it itself: the YouTube app, or a video in Safari.
+and the box plays it itself: YouTube, in the app or in Safari.
 
 There are two receivers, not one, for three reasons:
 

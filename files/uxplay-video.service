@@ -1,5 +1,5 @@
 [Unit]
-Description=UxPlay "HTPC Video" AirPlay video receiver (pinned master + language patch, -hls)
+Description=UxPlay "HTPC Video" AirPlay video receiver
 After=pipewire.service
 
 [Service]

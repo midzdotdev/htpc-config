@@ -1,0 +1,12 @@
+# Prowlarr only listens on loopback inside the vpn namespace. This socket
+# lives in the root namespace and hands each connection to
+# prowlarr-proxy.service, which forwards it from inside. Nothing is added to
+# the namespace, so wg0 stays its only way out.
+[Unit]
+Description=Prowlarr's web UI and API, reachable outside the vpn namespace
+
+[Socket]
+ListenStream=9696
+
+[Install]
+WantedBy=sockets.target

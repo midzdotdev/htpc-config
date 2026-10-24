@@ -17,6 +17,11 @@
   vars:
     home: /home/htpc
     uxplay_version: "1.73.7"
+    # "HTPC Video" runs a pre-release build: UxPlay master ec203121 plus the
+    # YouTube audio-language patch from draft PR FDH2/UxPlay#602, built from
+    # the fork branch yt-web-manifest-lang at this commit.
+    uxplay_video_commit: 9c9e9bfd1cd0b1bebff08b9d7a1d5542dfb4cddd
+    uxplay_video_prefix: /opt/uxplay-video
     # Only the packages this kiosk actually depends on. The box has ~255
     # manually-installed packages; listing them all would be noise.
     kiosk_packages:
@@ -76,6 +81,9 @@
       - gstreamer1.0-libav
       - gstreamer1.0-gl
       - gstreamer1.0-tools
+      # textoverlay (pango): playbin draws HLS subtitles with it, and -ca draws
+      # cover-art metadata with it. Only ever pulled in as a Recommends.
+      - gstreamer1.0-x
 
   tasks:
     - name: Install kiosk packages
@@ -126,6 +134,58 @@
             cmd: cmake --install build
             chdir: "/tmp/UxPlay-{{ uxplay_version }}"
           changed_when: true
+
+    # Its own prefix, so it never replaces the kiosk's /usr/local/bin/uxplay.
+    # uxplay -v only says "1.74" for any master build, so the guard is a stamp
+    # file holding the commit that was installed.
+    - name: Check installed uxplay-video commit
+      ansible.builtin.command: "cat {{ uxplay_video_prefix }}/COMMIT"
+      register: uxplay_video_installed
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Build and install uxplay-video at {{ uxplay_video_commit[:8] }}
+      when: uxplay_video_commit != (uxplay_video_installed.stdout | default(''))
+      vars:
+        uxplay_video_src: "/tmp/UxPlay-{{ uxplay_video_commit }}"
+      block:
+        - name: Fetch uxplay-video source
+          ansible.builtin.unarchive:
+            src: "https://github.com/midzdotdev/UxPlay/archive/{{ uxplay_video_commit }}.tar.gz"
+            dest: /tmp
+            remote_src: true
+            creates: "{{ uxplay_video_src }}"
+
+        # USE_DNS_SD keeps Avahi for discovery, the only option in 1.73.7.
+        # Master defaults to its own built-in mDNS responder instead, which
+        # would run a second responder next to avahi-daemon.
+        # RelWithDebInfo: with no build type, uxplay.cpp and the renderers
+        # build at -O0, and the debug info makes its crashes readable.
+        # Paths instead of chdir: under --check the source is never fetched,
+        # and a missing chdir fails the task where a plain command just skips.
+        - name: Configure and build uxplay-video
+          ansible.builtin.shell:
+            cmd: >-
+              cmake -S {{ uxplay_video_src }} -B {{ uxplay_video_src }}/build
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo -DUSE_DNS_SD=1
+              -DCMAKE_INSTALL_PREFIX={{ uxplay_video_prefix }}
+              && cmake --build {{ uxplay_video_src }}/build
+          changed_when: true
+
+        - name: Install uxplay-video
+          become: true
+          ansible.builtin.command:
+            cmd: "cmake --install {{ uxplay_video_src }}/build"
+          changed_when: true
+          notify: restart uxplay-video
+
+        - name: Record the installed uxplay-video commit
+          become: true
+          ansible.builtin.copy:
+            content: "{{ uxplay_video_commit }}\n"
+            dest: "{{ uxplay_video_prefix }}/COMMIT"
+            mode: "0644"
 
     - name: Check whether the flathub remote exists
       ansible.builtin.command: flatpak remotes --columns=name
@@ -244,6 +304,7 @@
         - idle-stop.sh
         - make-idle-splash.py
         - move-pointer.py
+        - park-pointer.py
 
     - name: Install the login shell that starts the session on tty1
       ansible.builtin.copy:
@@ -256,6 +317,41 @@
         src: files/kanshi-config
         dest: "{{ home }}/.config/kanshi/config"
         mode: "0644"
+
+    # "HTPC Video": a second uxplay for AirPlay video (YouTube, Safari), next to
+    # the kiosk's "HTPC" mirroring receiver. A user unit rather than a kiosk
+    # loop, so Restart=always covers its known crash and it can be restarted
+    # without touching the session. The pairing files (~/.uxplay-video.pem,
+    # ~/.uxplay-video.register) are state the receiver writes; never manage them.
+    - name: Create ~/.config/systemd/user
+      ansible.builtin.file:
+        path: "{{ home }}/.config/systemd/user"
+        state: directory
+        mode: "0755"
+
+    # Either change restarts the receiver, which drops anything playing on it.
+    - name: Install the "HTPC Video" units
+      ansible.builtin.copy:
+        src: "files/{{ item }}"
+        dest: "{{ home }}/.config/systemd/user/{{ item }}"
+        mode: "0664"
+      loop:
+        - uxplay-video.service
+        - uxplay-video-cursor.service
+      notify: restart uxplay-video
+
+    # daemon_reload here, not in a handler: on a fresh box the units must be
+    # loaded before this starts them. It never reports a change.
+    - name: Enable and start the "HTPC Video" units
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        scope: user
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop:
+        - uxplay-video.service
+        - uxplay-video-cursor.service
 
     - name: Render the "Stremio is paused" still
       ansible.builtin.command:
@@ -286,6 +382,13 @@
       become: true
       ansible.builtin.systemd_service:
         daemon_reload: true
+
+    # PartOf= restarts the cursor unit along with it.
+    - name: restart uxplay-video
+      ansible.builtin.systemd_service:
+        name: uxplay-video.service
+        scope: user
+        state: restarted
 
     # udev rules only apply to devices added after the reload, so the uinput
     # permissions and the PCI power setting take effect on the next boot (or

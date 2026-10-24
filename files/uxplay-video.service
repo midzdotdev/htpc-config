@@ -1,0 +1,20 @@
+[Unit]
+Description=UxPlay "HTPC Video" AirPlay video receiver (pinned master + language patch, -hls)
+After=pipewire.service
+
+[Service]
+Environment=WAYLAND_DISPLAY=wayland-0 DISPLAY=:0
+# stdbuf: uxplay block-buffers stdout into a pipe, which hides crashes from the journal.
+ExecStart=/usr/bin/stdbuf -oL /opt/uxplay-video/bin/uxplay -n "HTPC Video" -nh -hls -fs -vs "glimagesink render-rectangle=<0,0,1536,864>" -d 1 -m 02:48:54:50:43:56 -pin 1234 -key %h/.uxplay-video.pem -reg %h/.uxplay-video.register
+# -m: a fixed MAC, or the phone sees a new device on every start.
+# -pin: Mac/Safari senders demand PIN pairing before they hand over a URL. -key/-reg keep
+# that pairing across restarts, so a crash does not force a fresh PIN prompt.
+# render-rectangle: glimagesink on Wayland resizes its window to each new video
+# resolution (HLS quality switches) and Cage pins the smaller window top-left. A
+# fixed rectangle at the logical output size (1920x1080 at scale 1.25) stops that.
+# Segfaults on a mirror-to-video switch until FDH2/UxPlay#600 lands.
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

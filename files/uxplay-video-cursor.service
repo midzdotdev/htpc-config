@@ -1,0 +1,11 @@
+[Unit]
+Description=Park the pointer when "HTPC Video" opens its window
+PartOf=uxplay-video.service
+After=uxplay-video.service
+
+[Service]
+ExecStart=/bin/sh -c 'journalctl --user -f -n0 -o cat -u uxplay-video.service | grep --line-buffered -aE "on_video_play: location|raop_rtp_mirror starting mirroring" | while read -r _; do %h/bin/park-pointer.py; done'
+Restart=always
+
+[Install]
+WantedBy=uxplay-video.service

@@ -139,6 +139,10 @@ itself listens on loopback inside the namespace; `prowlarr-proxy.socket` holds
 port 9696 outside it and forwards each connection in, so the namespace gets no
 second way out.
 
+Keep Prowlarr's login on Forms. Through the proxy every client looks like
+127.0.0.1, so "Disabled for Local Addresses" would drop the login for the
+whole LAN and tailnet.
+
 The playbook installs the pinned release and turns off Prowlarr's own updater.
 To upgrade, change `prowlarr_version` and `prowlarr_sha256` in `site.yml`.
 Indexers, the UI login and the API key live in `/var/lib/prowlarr` on the box

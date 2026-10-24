@@ -413,7 +413,9 @@
             src: /tmp/prowlarr.tar.gz
             dest: "/opt/prowlarr/{{ prowlarr_version }}/bin"
             remote_src: true
-            extra_opts: [--strip-components=1]
+            # As root, tar keeps the archive's owner (uid 1001), and the next
+            # account created would get that uid and own Prowlarr's DLLs.
+            extra_opts: [--strip-components=1, --no-same-owner]
 
         - name: Remove the Prowlarr download
           ansible.builtin.file:
@@ -444,19 +446,28 @@
         state: link
       notify: restart prowlarr
 
-    - name: Install the Prowlarr units
+    - name: Install the Prowlarr unit
+      become: true
+      ansible.builtin.copy:
+        src: files/system/prowlarr.service
+        dest: /etc/systemd/system/prowlarr.service
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart prowlarr
+
+    - name: Install the Prowlarr proxy units
       become: true
       ansible.builtin.copy:
         src: "files/system/{{ item }}"
         dest: "/etc/systemd/system/{{ item }}"
         mode: "0644"
       loop:
-        - prowlarr.service
         - prowlarr-proxy.socket
         - prowlarr-proxy.service
       notify:
         - reload systemd
-        - restart prowlarr
+        - restart prowlarr-proxy
 
     - name: Start Prowlarr
       become: true
@@ -503,4 +514,20 @@
       become: true
       ansible.builtin.systemd_service:
         name: prowlarr
+        state: restarted
+
+    # The running proxy holds a copy of the listening socket, so stop it
+    # first or the socket cannot rebind a changed ListenStream.
+    - name: stop prowlarr-proxy.service
+      listen: restart prowlarr-proxy
+      become: true
+      ansible.builtin.systemd_service:
+        name: prowlarr-proxy.service
+        state: stopped
+
+    - name: restart prowlarr-proxy.socket
+      listen: restart prowlarr-proxy
+      become: true
+      ansible.builtin.systemd_service:
+        name: prowlarr-proxy.socket
         state: restarted

@@ -127,6 +127,27 @@ sudo ip netns exec vpn wg show
 A long-running service joins it from its unit file instead; the comment at the
 top of `files/system/vpn-netns.service` has the lines to copy.
 
+## Prowlarr
+
+Prowlarr searches the torrent sites (indexers) on seedstrem's behalf, so
+Stremio can turn an IMDb id into a list of torrents. It runs inside the `vpn`
+namespace and reaches the sites only through NordVPN; with the tunnel down its
+searches fail.
+
+Web UI and API: `http://<the box's LAN IP>:9696`, also on the tailnet. Prowlarr
+itself listens on loopback inside the namespace; `prowlarr-proxy.socket` holds
+port 9696 outside it and forwards each connection in, so the namespace gets no
+second way out.
+
+Keep Prowlarr's login on Forms. Through the proxy every client looks like
+127.0.0.1, so "Disabled for Local Addresses" would drop the login for the
+whole LAN and tailnet.
+
+The playbook installs the pinned release and turns off Prowlarr's own updater.
+To upgrade, change `prowlarr_version` and `prowlarr_sha256` in `site.yml`.
+Indexers, the UI login and the API key live in `/var/lib/prowlarr` on the box
+and are not in this repo.
+
 ## VNC
 
 `http://<the box's LAN IP>:6080/vnc.html` serves noVNC, bound to the wifi

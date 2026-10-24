@@ -1,0 +1,31 @@
+# User, data dir and flags follow the Servarr wiki's Debian install. The
+# binaries do not: they sit in /opt/prowlarr/<version>/bin, root-owned,
+# because Prowlarr only reads ../package_info from a directory named "bin".
+# Joined to the vpn namespace with the lines from vpn-netns.service.
+[Unit]
+Description=Prowlarr indexer manager, inside the vpn namespace
+BindsTo=vpn-netns.service
+After=vpn-netns.service
+
+[Service]
+User=prowlarr
+Group=prowlarr
+StateDirectory=prowlarr
+# config.xml holds the API key and is written world-readable.
+StateDirectoryMode=0700
+NetworkNamespacePath=/run/netns/vpn
+BindReadOnlyPaths=/etc/netns/vpn/resolv.conf:/etc/resolv.conf
+# Loopback only. prowlarr-proxy is the way in; the default "*" would also
+# listen on wg0.
+Environment=PROWLARR__SERVER__BINDADDRESS=127.0.0.1
+ExecStart=/opt/prowlarr/current/bin/Prowlarr -nobrowser -data=/var/lib/prowlarr/
+# The wiki's KillMode=process is left out: it only exists so the built-in
+# updater survives the restart it triggers, and package_info turns that off.
+TimeoutStopSec=20
+Restart=on-failure
+
+[Install]
+# Not multi-user.target: BindsTo stops Prowlarr with the tunnel but never
+# starts it again. Hanging it off vpn-netns brings it back whenever the
+# tunnel comes up, including after a failed first try at boot.
+WantedBy=vpn-netns.service

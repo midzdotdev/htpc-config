@@ -24,6 +24,9 @@
     #   curl -s 'https://api.nordvpn.com/v1/servers/recommendations?filters[country_id]=227&filters[servers_technologies][identifier]=wireguard_udp&limit=1'
     nord_endpoint: manchester.gb.wg.nordhold.net
     nord_pubkey: iX4TVS9HY+WrlTvSKaUqWmoxG6s6cwnmcEtblHf46BU=
+    # The linux-core-x64 asset of the GitHub release with this tag.
+    prowlarr_version: "2.6.5.5623"
+    prowlarr_sha256: c0824e9f0e9c79e085882f6143041be5c2cde0519baa59e9477d9e4dcbe1b5e3
     # Only the packages this kiosk actually depends on. The box has ~255
     # manually-installed packages; listing them all would be noise.
     kiosk_packages:
@@ -60,6 +63,8 @@
       - socat
       # wg, for the NordVPN tunnel in the "vpn" network namespace.
       - wireguard-tools
+      # Prowlarr's tarball bundles .NET and SQLite, but not ICU.
+      - libicu76
       # Diagnostics. Only the ones actually on the box -- the old Nix list named
       # several (htop, iotop, lm_sensors, sshpass, vim, jq) that were never
       # installed, which is the sort of fiction that made that config
@@ -287,8 +292,8 @@
           - "Stremio must be signed in by hand; its addons live in the account."
           - "There is no firewall on this box (iptables policy is ACCEPT). It
              listens on 9530 for the Unified Remote web UI, 9512 for the remote
-             protocol, 11470 for Stremio's streaming server, 6080 for noVNC, and
-             uxplay's dynamic AirPlay ports."
+             protocol, 11470 for Stremio's streaming server, 6080 for noVNC,
+             9696 for Prowlarr, and uxplay's dynamic AirPlay ports."
           - "The NordVPN key for the vpn namespace is installed by hand (see
              README). Without it the vpn tasks below fail; they run last so
              everything above is already applied."
@@ -368,6 +373,117 @@
         enabled: true
         state: started
 
+    # Prowlarr, inside the vpn namespace. Its data and API key live in
+    # /var/lib/prowlarr and are not managed here.
+    - name: Create the prowlarr user
+      become: true
+      ansible.builtin.user:
+        name: prowlarr
+        system: true
+        home: /var/lib/prowlarr
+        create_home: false
+        shell: /usr/sbin/nologin
+
+    - name: Check for Prowlarr {{ prowlarr_version }}
+      ansible.builtin.stat:
+        path: "/opt/prowlarr/{{ prowlarr_version }}/bin/Prowlarr"
+      register: prowlarr_bin
+
+    # Each version unpacks into its own directory and "current" is switched
+    # to it, so an upgrade never leaves the old version's files mixed in.
+    - name: Install Prowlarr {{ prowlarr_version }}
+      when: not prowlarr_bin.stat.exists
+      become: true
+      block:
+        - name: Download Prowlarr
+          ansible.builtin.get_url:
+            url: "https://github.com/Prowlarr/Prowlarr/releases/download/v{{ prowlarr_version }}/Prowlarr.master.{{ prowlarr_version }}.linux-core-x64.tar.gz"
+            dest: /tmp/prowlarr.tar.gz
+            checksum: "sha256:{{ prowlarr_sha256 }}"
+            mode: "0644"
+
+        - name: Create the Prowlarr install directory
+          ansible.builtin.file:
+            path: "/opt/prowlarr/{{ prowlarr_version }}/bin"
+            state: directory
+            mode: "0755"
+
+        - name: Unpack Prowlarr
+          ansible.builtin.unarchive:
+            src: /tmp/prowlarr.tar.gz
+            dest: "/opt/prowlarr/{{ prowlarr_version }}/bin"
+            remote_src: true
+            # As root, tar keeps the archive's owner (uid 1001), and the next
+            # account created would get that uid and own Prowlarr's DLLs.
+            extra_opts: [--strip-components=1, --no-same-owner]
+
+        - name: Remove the Prowlarr download
+          ansible.builtin.file:
+            path: /tmp/prowlarr.tar.gz
+            state: absent
+
+    # Prowlarr reads this from the directory above its own, and only when its
+    # own is named "bin". UpdateMethod=External turns off the in-app updater,
+    # which would otherwise replace the pinned version behind Ansible's back.
+    - name: Turn off Prowlarr's self-updater
+      become: true
+      ansible.builtin.copy:
+        content: |
+          PackageVersion={{ prowlarr_version }}
+          PackageAuthor=htpc-config
+          UpdateMethod=External
+          UpdateMethodMessage=Pinned by htpc-config's site.yml; change prowlarr_version there.
+          Branch=master
+        dest: "/opt/prowlarr/{{ prowlarr_version }}/package_info"
+        mode: "0644"
+      notify: restart prowlarr
+
+    - name: Point /opt/prowlarr/current at {{ prowlarr_version }}
+      become: true
+      ansible.builtin.file:
+        src: "{{ prowlarr_version }}"
+        dest: /opt/prowlarr/current
+        state: link
+      notify: restart prowlarr
+
+    - name: Install the Prowlarr unit
+      become: true
+      ansible.builtin.copy:
+        src: files/system/prowlarr.service
+        dest: /etc/systemd/system/prowlarr.service
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart prowlarr
+
+    - name: Install the Prowlarr proxy units
+      become: true
+      ansible.builtin.copy:
+        src: "files/system/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - prowlarr-proxy.socket
+        - prowlarr-proxy.service
+      notify:
+        - reload systemd
+        - restart prowlarr-proxy
+
+    - name: Start Prowlarr
+      become: true
+      ansible.builtin.systemd_service:
+        name: prowlarr
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Expose Prowlarr outside the vpn namespace
+      become: true
+      ansible.builtin.systemd_service:
+        name: prowlarr-proxy.socket
+        enabled: true
+        state: started
+
   handlers:
     - name: reload systemd
       become: true
@@ -392,4 +508,26 @@
       become: true
       ansible.builtin.systemd_service:
         name: vpn-netns-check.timer
+        state: restarted
+
+    - name: restart prowlarr
+      become: true
+      ansible.builtin.systemd_service:
+        name: prowlarr
+        state: restarted
+
+    # The running proxy holds a copy of the listening socket, so stop it
+    # first or the socket cannot rebind a changed ListenStream.
+    - name: stop prowlarr-proxy.service
+      listen: restart prowlarr-proxy
+      become: true
+      ansible.builtin.systemd_service:
+        name: prowlarr-proxy.service
+        state: stopped
+
+    - name: restart prowlarr-proxy.socket
+      listen: restart prowlarr-proxy
+      become: true
+      ansible.builtin.systemd_service:
+        name: prowlarr-proxy.socket
         state: restarted

@@ -1,0 +1,10 @@
+[Unit]
+Description=Forward Prowlarr's port into the vpn namespace
+BindsTo=vpn-netns.service
+Requires=prowlarr.service
+After=vpn-netns.service prowlarr.service
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:9696
+NetworkNamespacePath=/run/netns/vpn
+DynamicUser=yes

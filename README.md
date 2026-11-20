@@ -39,7 +39,7 @@ One flat playbook, no roles. There is one host and one job.
 
 `.bash_profile` starts Cage on tty1, which runs `kiosk-wayland.sh`. That script
 puts Stremio in the foreground and everything else into background watchdog
-loops: kanshi, uxplay, Unified Remote, the VNC pair and the idle backstop.
+loops: kanshi, uxplay, Unified Remote and the VNC pair.
 
 To restart the session, kill the `kiosk-wayland.sh` process tree so Cage exits
 on its own and `.bash_profile` starts a fresh one:
@@ -68,8 +68,11 @@ when the pipeline starts rather than when video arrives, so a failed session
 leaves a blank white window sitting over Stremio.
 
 The TV no longer drops the HDMI link when it is powered off, so `tv-connected`
-always reports a display and `tv-off-hook.sh` can never fire. `idle-stop.sh` is
-the backstop that covers it, driven by swayidle.
+always reports a display and `tv-off-hook.sh` can never fire. An idle backstop
+used to cover this by stopping Stremio after 45 minutes without input. It was
+removed because it could not see HTTP streams or AirPlay as playback, so it
+killed Stremio mid-film. With it gone, a TV switched off while Stremio sits on a
+playback screen leaves Stremio running; it once pegged a core for days that way.
 
 Cage exposes no layer-shell and no data-control. Wallpaper daemons and the
 Wayland clipboard cannot work on this box at all.

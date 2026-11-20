@@ -29,9 +29,6 @@
       - kanshi          # re-applies the output layout when the TV hotplugs
       - grim            # screenshots, used for debugging the session
       - wlr-randr       # inspect/one-shot output changes
-      - swayidle        # drives the idle backstop (see files/idle-stop.sh)
-      - imv             # shows the "Stremio is paused" still
-      - python3-pil     # renders that still (files/make-idle-splash.py)
       - flatpak         # Stremio ships as a flatpak
       - wayvnc          # browser-reachable VNC on the LAN
       - novnc
@@ -301,9 +298,6 @@
         - tv-connected
         - tv-off-hook.sh
         - urclick-fix.py
-        - idle-stop.sh
-        - make-idle-splash.py
-        - move-pointer.py
         - park-pointer.py
 
     - name: Install the login shell that starts the session on tty1
@@ -353,11 +347,6 @@
       loop:
         - uxplay-video.service
         - uxplay-video-cursor.service
-
-    - name: Render the "Stremio is paused" still
-      ansible.builtin.command:
-        cmd: "python3 {{ home }}/bin/make-idle-splash.py"
-        creates: "{{ home }}/.local/share/kiosk-idle.png"
 
     - name: Report what is left to do by hand
       ansible.builtin.debug:

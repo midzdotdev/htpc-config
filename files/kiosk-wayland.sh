@@ -19,14 +19,6 @@
 
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 
-# A fresh session must never start suppressed. swayidle clears the idle
-# backstop's inhibit on exit, but only if it had actually gone idle first — a
-# SIGKILL or a crash skips that, and the flag lives in XDG_RUNTIME_DIR, which
-# survives a session restart even though it does not survive a reboot. Without
-# this line that leaves the loop below refusing to start Stremio, with a black
-# TV and no clue why, until someone happens to press a button.
-rm -f "$XDG_RUNTIME_DIR/kiosk-idle-stop"
-
 # Output layout (which outputs are on, and the 125% scale) lives in
 # ~/.config/kanshi/config. kanshi rather than a one-shot wlr-randr because the
 # TV hotplugs: switching it off or changing its input disconnects HDMI, and
@@ -162,27 +154,6 @@ rm -f "$XDG_RUNTIME_DIR/kiosk-idle-stop"
   done
 ) &
 
-# Idle backstop. tv-off-hook.sh only fires when the TV drops the HDMI link, and
-# this TV stopped doing that — see the header of idle-stop.sh. swayidle watches
-# the compositor seat (so it sees VNC's virtual input too, which /dev/input
-# would not) and stops Stremio once nothing has happened for TV_IDLE_STOP.
-#
-# 45 minutes is deliberately long. The failure being prevented is measured in
-# days, and the one case this can misjudge is a fully-buffered film playing with
-# no download activity and nobody touching the remote — so the threshold sits
-# well past any plausible pause-and-return.
-#
-# `resume` also runs when swayidle itself exits, which is what clears the
-# inhibit on a session restart instead of leaving Stremio suppressed.
-(
-  while :; do
-    swayidle -w \
-      timeout "${TV_IDLE_STOP:-2700}" "$HOME/bin/idle-stop.sh" \
-      resume "$HOME/bin/idle-stop.sh --clear" 2>&1 | logger -t swayidle
-    sleep 5
-  done
-) &
-
 # Stremio in the foreground, respawned in place. Cage exits when its client
 # exits, so looping here (rather than exec'ing) keeps the compositor and the
 # helpers above alive across a Stremio crash instead of rebuilding the whole
@@ -198,14 +169,8 @@ rm -f "$XDG_RUNTIME_DIR/kiosk-idle-stop"
 # gate keeps the loop from immediately starting it again. Polling rather than
 # waiting on an event so that a TV coming back is picked up within a few
 # seconds even if the hook missed a transition.
-#
-# The second gate is the idle backstop's inhibit file. Without it, stopping
-# Stremio would achieve nothing: this loop polls every 3s and tv-connected still
-# reads "connected" with the TV off, so it would restart Stremio immediately.
-# Any seat activity clears the file (idle-stop.sh --clear) and playback resumes
-# on the next pass.
 while :; do
-  if "$HOME/bin/tv-connected" && ! [ -e "${XDG_RUNTIME_DIR:-/tmp}/kiosk-idle-stop" ]; then
+  if "$HOME/bin/tv-connected"; then
     flatpak run com.stremio.Stremio --no-window-decorations >>/tmp/stremio.log 2>&1
   fi
   sleep 3

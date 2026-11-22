@@ -101,6 +101,11 @@ rm -f "$XDG_RUNTIME_DIR/kiosk-idle-stop"
 # blank white window parked on top of Stremio until the session is restarted.
 # glimagesink was checked for this specifically and parks nothing while idle.
 #
+# render-rectangle pins glimagesink to the logical output size (1920x1080 at
+# scale 1.25 = 1536x864). Without it the window resizes to each new video
+# resolution and Cage pins the smaller window top-left. Same fix as the
+# "HTPC Video" unit; update both if the output mode or scale changes.
+#
 # -hls is deliberately NOT used. It made uxplay advertise AirPlay video support
 # (feature bits 0 and 4), so iOS routed Safari/WebKit video at the HLS path.
 # uxplay only implements HLS for the YouTube app and aborts on anything else,
@@ -111,15 +116,16 @@ rm -f "$XDG_RUNTIME_DIR/kiosk-idle-stop"
 #   WARNING: Unsupported HLS streaming format: clientProcName com.apple.WebKit.GPU
 #            not found in supported list: YouTube      (then SIGSEGV)
 #
-# It never made Safari's per-video AirPlay button work either: upstream says
-# browser AirPlay is unsupported. Mirroring is the only path that works.
+# AirPlay video (YouTube, in the app or in Safari) goes to the separate
+# "HTPC Video" receiver instead: a patched pre-release uxplay with -hls, run as
+# the user unit uxplay-video.service so its crashes never take down this one.
 #
 # stdbuf -oL because uxplay's stdout is block-buffered when piped into logger,
 # so lines only reached the journal in 4KB bursts. Sessions and crashes were
 # invisible, which cost real debugging time more than once.
 (
   while :; do
-    stdbuf -oL -eL /usr/local/bin/uxplay -n HTPC -nh -fs -ca -nofreeze -vs glimagesink 2>&1 | logger -t uxplay
+    stdbuf -oL -eL /usr/local/bin/uxplay -n HTPC -nh -fs -ca -nofreeze -vs "glimagesink render-rectangle=<0,0,1536,864>" 2>&1 | logger -t uxplay
     sleep 2
   done
 ) &

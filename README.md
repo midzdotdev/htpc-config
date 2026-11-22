@@ -74,6 +74,47 @@ the backstop that covers it, driven by swayidle.
 Cage exposes no layer-shell and no data-control. Wallpaper daemons and the
 Wayland clipboard cannot work on this box at all.
 
+## HTPC Video
+
+The box advertises two AirPlay receivers. "HTPC" is the kiosk's mirroring
+receiver. "HTPC Video" takes AirPlay video, where the sender hands over a URL
+and the box plays it itself: YouTube, in the app or in Safari.
+
+There are two receivers, not one, for three reasons:
+
+- Mirroring then video on the same receiver segfaults (FDH2/UxPlay#600).
+  Kept apart, a crash in "HTPC Video" never takes down mirroring.
+- Mirroring stays on the stable 1.73.7 release; only video runs the
+  pre-release build.
+- "HTPC" needs no PIN, so guests can mirror without pairing.
+
+The plan is to merge them back into one receiver once #600 lands and 1.74 is
+released.
+
+"HTPC Video" runs as the user unit `uxplay-video.service`, not from the kiosk
+script, so it can be restarted without touching the session:
+
+```
+ssh htpc 'systemctl --user restart uxplay-video'
+```
+
+That drops anything playing on it, so check the journal for an active
+`/feedback` heartbeat first.
+
+The PIN is 1234. Mac and Safari senders refuse to hand over a URL without PIN
+pairing. The pairing lives in `~/.uxplay-video.pem` and
+`~/.uxplay-video.register`, which survive restarts and are deliberately not
+managed here.
+
+It still segfaults when a sender switches from mirroring to video on it, until
+#600 lands. `Restart=always` brings it back within seconds.
+
+The binary is a patched pre-release build in `/opt/uxplay-video`: UxPlay
+master plus a YouTube audio-language fix (draft PR FDH2/UxPlay#602), built
+from the `midzdotdev/UxPlay` fork at the commit pinned in `site.yml`. To move
+it, change `uxplay_video_commit` and re-run; the stamp file
+`/opt/uxplay-video/COMMIT` is what tells the playbook to rebuild.
+
 ## Not managed here
 
 Unified Remote (`/opt/urserver`) is closed source and ships as a tarball with no

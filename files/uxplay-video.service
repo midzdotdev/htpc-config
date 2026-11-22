@@ -3,6 +3,12 @@ Description=UxPlay "HTPC Video" AirPlay video receiver
 After=pipewire.service
 
 [Service]
+# Lingering starts this at boot, before cage. Without a compositor glimagesink falls
+# back to KMS and takes DRM master on card0, so cage cannot start and the TV sits on
+# the boot screen. Wait for cage's socket, and forbid the KMS fallback outright.
+Environment=GST_GL_WINDOW=wayland
+ExecStartPre=/bin/sh -c 'until [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; do sleep 2; done'
+TimeoutStartSec=infinity
 Environment=WAYLAND_DISPLAY=wayland-0 DISPLAY=:0
 # stdbuf: uxplay block-buffers stdout into a pipe, which hides crashes from the journal.
 ExecStart=/usr/bin/stdbuf -oL /opt/uxplay-video/bin/uxplay -n "HTPC Video" -nh -hls -fs -vs "glimagesink render-rectangle=<0,0,1536,864>" -d 1 -m 02:48:54:50:43:56 -pin 1234 -key %h/.uxplay-video.pem -reg %h/.uxplay-video.register
